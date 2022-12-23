@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"greenlight.xamss.net/internal/data"
 	"log"
 	"net/http"
 	"os"
@@ -26,9 +27,11 @@ type config struct {
 	}
 }
 
+// Add a models field to hold our new Models struct.
 type application struct {
 	config config
 	logger *log.Logger
+	models data.Models
 }
 
 func main() {
@@ -65,6 +68,7 @@ func main() {
 	app := &application{
 		config: cfg,
 		logger: logger,
+		models: data.NewModels(pool),
 	}
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.port),
