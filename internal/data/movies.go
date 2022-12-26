@@ -2,9 +2,10 @@ package data
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"greenlight.xamss.net/internal/validator"
 	"time"
@@ -101,7 +102,7 @@ func (m MovieModel) Get(id int64) (*Movie, error) {
 	// error instead.
 	if err != nil {
 		switch {
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, pgx.ErrNoRows):
 			return nil, ErrRecordNotFound
 		default:
 			return nil, err
@@ -113,13 +114,13 @@ func (m MovieModel) Get(id int64) (*Movie, error) {
 
 // Add a placeholder method for updating a specific record in the movies table.
 func (m MovieModel) Update(movie *Movie) error {
-	// Declare the SQL query for updating the record and returning the new version
-	// number.
+	// Add the 'AND version = $6' clause to the SQL query.
 	query := `
 	UPDATE movies
 	SET title = $1, year = $2, runtime = $3, genres = $4, version = gen_random_uuid()
-	WHERE id = $5
+	WHERE id = $5 AND version = $6
 	RETURNING version`
+
 	// Create an args slice containing the values for the placeholder parameters.
 	args := []interface{}{
 		movie.Title,
@@ -127,12 +128,25 @@ func (m MovieModel) Update(movie *Movie) error {
 		movie.Runtime,
 		movie.Genres,
 		movie.ID,
+		movie.Version, // Add the expected movie version.
 	}
-	// Use the QueryRow() method to execute the query, passing in the args slice as a
-	// variadic parameter and scanning the new version value into the movie struct.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return m.pool.QueryRow(ctx, query, args...).Scan(&movie.Version)
+	// Execute the SQL query. If no matching row could be found, we know the movie
+	// version has changed (or the record has been deleted) and we return our custom
+	// ErrEditConflict error.
+	err := m.pool.QueryRow(ctx, query, args...).Scan(&movie.Version)
+	if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrEditConflict
+		default:
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Add a placeholder method for deleting a specific record from the movies table.
@@ -164,4 +178,83 @@ func (m MovieModel) Delete(id int64) error {
 		return ErrRecordNotFound
 	}
 	return nil
+}
+
+// Create a new GetAll() method which returns a slice of movies. Although we're not
+// using them right now, we've set this up to accept the various filter parameters as
+// arguments.
+func (m MovieModel) GetAll(title string, genres []string, filters Filters) ([]*Movie, Metadata, error) {
+	// Add an ORDER BY clause and interpolate the sort column and direction. Importantly
+	// notice that we also include a secondary sort on the movie ID to ensure a
+	// consistent ordering.
+	// Update the SQL query to include the LIMIT and OFFSET clauses with placeholder
+	// parameter values.
+	query := fmt.Sprintf(`
+		SELECT count(*) OVER(), id, created_at, title, year, runtime, genres, version
+		FROM movies
+		WHERE (to_tsvector('simple', title) @@ plainto_tsquery('simple', $1) OR $1 = '')
+		AND (genres @> $2 OR $2 = '{}')
+		ORDER BY %s %s, id ASC
+		LIMIT $3 OFFSET $4`, filters.sortColumn(), filters.sortDirection())
+
+	// Create a context with a 3-second timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// As our SQL query now has quite a few placeholder parameters, let's collect the
+	// values for the placeholders in a slice. Notice here how we call the limit() and
+	// offset() methods on the Filters struct to get the appropriate values for the
+	// LIMIT and OFFSET clauses.
+	args := []interface{}{title, genres, filters.limit(), filters.offset()}
+
+	// Use QueryContext() to execute the query. This returns a sql.Rows resultset
+	// containing the result.
+	// And then pass the args slice to QueryContext() as a variadic parameter.
+	rows, err := m.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, Metadata{}, err
+	}
+	// Importantly, defer a call to rows.Close() to ensure that the resultset is closed
+	// before GetAll() returns.
+	defer rows.Close()
+
+	// Declare a totalRecords variable.
+	totalRecords := 0
+
+	// Initialize an empty slice to hold the movie data.
+	movies := []*Movie{}
+	// Use rows.Next to iterate through the rows in the resultset.
+	for rows.Next() {
+		// Initialize an empty Movie struct to hold the data for an individual movie.
+		var movie Movie
+		// Scan the values from the row into the Movie struct. Again, note that we're
+		// using the pq.Array() adapter on the genres field here.
+		err := rows.Scan(
+			&totalRecords, // Scan the count from the window function into totalRecords.
+			&movie.ID,
+			&movie.CreatedAt,
+			&movie.Title,
+			&movie.Year,
+			&movie.Runtime,
+			&movie.Genres,
+			&movie.Version,
+		)
+		if err != nil {
+			return nil, Metadata{}, err
+		}
+		// Add the Movie struct to the slice.
+		movies = append(movies, &movie)
+	}
+	// When the rows.Next() loop has finished, call rows.Err() to retrieve any error
+	// that was encountered during the iteration.
+	if err = rows.Err(); err != nil {
+		return nil, Metadata{}, err
+	}
+
+	// Generate a Metadata struct, passing in the total record count and pagination
+	// parameters from the client.
+	metadata := calculateMetadata(totalRecords, filters.Page, filters.PageSize)
+
+	// If everything went OK, then return the slice of movies.
+	return movies, metadata, nil
 }
