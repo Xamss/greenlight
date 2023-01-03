@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-func (app *application) routes() *httprouter.Router {
+func (app *application) routes() http.Handler {
 	router := httprouter.New()
 	// Convert the notFoundResponse() helper to a http.Handler using the
 	// http.HandlerFunc() adapter, and then set it as the custom error handler for 404
@@ -23,5 +23,6 @@ func (app *application) routes() *httprouter.Router {
 	router.HandlerFunc(http.MethodDelete, "/v1/movies/:id", app.deleteMovieHandler)
 	// Add the route for the GET /v1/movies endpoint.
 	router.HandlerFunc(http.MethodGet, "/v1/movies", app.listMoviesHandler)
-	return router
+	// Wrap the router with the rateLimit() middleware.
+	return app.recoverPanic(app.rateLimit(router))
 }
