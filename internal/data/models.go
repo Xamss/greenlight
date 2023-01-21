@@ -3,6 +3,7 @@ package data
 import (
 	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"time"
 )
 
 // Define a custom ErrRecordNotFound error. We'll return this from our Get() method when
@@ -29,6 +30,12 @@ type Models struct {
 		Insert(user *User) error
 		GetByEmail(email string) (*User, error)
 		Update(user *User) error
+		GetForToken(tokenScope, tokenPlaintext string) (*User, error)
+	}
+	Tokens interface {
+		Insert(token *Token) error
+		New(userID int64, ttl time.Duration, scope string) (*Token, error)
+		DeleteAllForUser(scope string, userID int64) error
 	}
 }
 
@@ -38,5 +45,6 @@ func NewModels(pool *pgxpool.Pool) Models {
 	return Models{
 		Movies: MovieModel{pool: pool},
 		Users:  UserModel{pool: pool},
+		Tokens: TokenModel{pool: pool},
 	}
 }

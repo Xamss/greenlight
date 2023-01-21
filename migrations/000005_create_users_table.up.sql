@@ -5,5 +5,5 @@ CREATE TABLE IF NOT EXISTS users (
                                      email citext UNIQUE NOT NULL,
                                      password_hash bytea NOT NULL,
                                      activated bool NOT NULL,
-                                     version integer NOT NULL DEFAULT 1
+                                     version uuid NOT NULL DEFAULT gen_random_uuid()
 );
