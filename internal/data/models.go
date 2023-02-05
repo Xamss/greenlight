@@ -37,14 +37,19 @@ type Models struct {
 		New(userID int64, ttl time.Duration, scope string) (*Token, error)
 		DeleteAllForUser(scope string, userID int64) error
 	}
+	Permissions interface {
+		GetAllForUser(userID int64) (Permissions, error)
+		AddForUser(userID int64, codes ...string) error
+	}
 }
 
 // For ease of use, we also add a New() method which returns a Models struct containing
 // the initialized MovieModel.
 func NewModels(pool *pgxpool.Pool) Models {
 	return Models{
-		Movies: MovieModel{pool: pool},
-		Users:  UserModel{pool: pool},
-		Tokens: TokenModel{pool: pool},
+		Movies:      MovieModel{pool: pool},
+		Users:       UserModel{pool: pool},
+		Tokens:      TokenModel{pool: pool},
+		Permissions: PermissionModel{pool: pool},
 	}
 }
